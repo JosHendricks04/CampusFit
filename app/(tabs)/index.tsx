@@ -39,7 +39,7 @@ import {
 } from 'react-native';
 
 // --- 1. CONFIGURATION ---
-const SERVER_URL = "https://your-new-link-here.ngrok-free.dev";
+const SERVER_URL = "https://campusfit-backend-xxxx.onrender.com";
 
 const DEFAULT_PRIMARY = "#000000"; 
 const DEFAULT_SECONDARY = "#007AFF"; 
