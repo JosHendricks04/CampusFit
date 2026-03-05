@@ -1,15 +1,15 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
-// Your Campus Fit project configuration
+// Your Campus Fit project configuration (Now Secured!)
 const firebaseConfig = {
-  apiKey: "AIzaSyAai4uy6JsEPQahIGqGFQ_2NWU-Z4CQk48",
-  authDomain: "college-gym-tracker.firebaseapp.com",
-  projectId: "college-gym-tracker",
-  storageBucket: "college-gym-tracker.firebasestorage.app",
-  messagingSenderId: "55569932740",
-  appId: "1:55569932740:web:d630c7c07e588c07750491",
-  measurementId: "G-4VH2YJ62P7"
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID
 };
 
 // Initialize Firebase

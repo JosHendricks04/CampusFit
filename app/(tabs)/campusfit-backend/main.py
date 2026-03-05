@@ -4,12 +4,21 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
 
+# 🚨 NEW: Library to read your hidden .env file
+from dotenv import load_dotenv
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 # --- 1. SETUP API KEY ---
-# 🚨 SECURITY WARNING: Paste your actual API key here!
-os.environ["GOOGLE_API_KEY"] = "AIzaSyB0OTCl4rNSIuArjwOJFKWgVMA18fvcCCk"
+# This looks for the .env file in the same folder as this script
+load_dotenv()
+
+# We pull the key from the environment instead of hardcoding it
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+# Make sure LangChain knows which key to use
+os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
 # --- 2. DEFINE THE STRUCTURED OUTPUTS (THE TOOLS) ---
 class Exercise(BaseModel):
@@ -29,16 +38,14 @@ class WorkoutPlan(BaseModel):
     description: str = Field(description="A brief explanation of why this routine fits their goal")
     schedule: List[WorkoutDay]
 
-# 🚨 NEW: The strict dual-color format we are forcing the AI to use
 class ColorResponse(BaseModel):
     primary: str = Field(description="The primary brand hex color (e.g., #00274C for Michigan Blue)")
     secondary: str = Field(description="The secondary brand hex color (e.g., #FFCB05 for Michigan Maize)")
 
 # --- 3. INITIALIZE LANGCHAIN ---
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+# Note: Ensure you have access to gemini-2.0-flash or the latest available model
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.2)
 llm_with_tools = llm.bind_tools([WorkoutPlan])
-
-# 🚨 NEW: This specific LLM forces the ColorResponse JSON format
 llm_colors = llm.with_structured_output(ColorResponse)
 
 SYSTEM_PROMPT = """You are 'Coach AI', a highly scientific sports science coach with a Ph.D. in Kinesiology, working for the CampusFit app.
@@ -46,10 +53,10 @@ Your job is to optimize the user's performance using evidence-based principles.
 
 RULES:
 1. You have two modes: Answering Questions AND Building Workouts.
-2. IF THE USER ASKS A QUESTION: Be extremely concise. Give a short, punchy summary (1-2 sentences) or a brief bulleted list of the main points. DO NOT give long explanations initially. Always end by asking, "Would you like me to explain the science behind this in more detail?"
-3. IF THE USER ASKS FOR A WORKOUT: You must use the WorkoutPlan tool to generate the routine. Do not output the routine as standard text.
-4. Before generating a workout, you must know their: Primary Goal, Days Per Week, and Available Equipment. If missing, ask friendly clarifying questions.
-5. Always maintain a professional, analytical, and encouraging tone. Use terms like "hypertrophy", "CNS fatigue", or "motor pattern" when appropriate, but explain them simply.
+2. IF THE USER ASKS A QUESTION: Be extremely concise. Give a short, punchy summary (1-2 sentences) or a brief bulleted list of the main points. Always end by asking, "Would you like me to explain the science behind this in more detail?"
+3. IF THE USER ASKS FOR A WORKOUT: You must use the WorkoutPlan tool to generate the routine.
+4. Before generating a workout, you must know their: Primary Goal, Days Per Week, and Available Equipment.
+5. Always maintain a professional, analytical, and encouraging tone.
 """
 
 # --- 4. FASTAPI SETUP ---
@@ -75,7 +82,6 @@ class ColorRequest(BaseModel):
 
 # --- 5. THE API ENDPOINTS ---
 
-# 🚨 UPDATED ROUTE: Perfectly extracts Primary & Secondary colors!
 @app.post("/get_school_color")
 async def get_school_color(request: ColorRequest):
     try:
@@ -84,7 +90,7 @@ async def get_school_color(request: ColorRequest):
         return {"primary": color_data.primary, "secondary": color_data.secondary}
     except Exception as e:
         print(f"Color Error: {e}")
-        return {"primary": "#000000", "secondary": "#007AFF"} # Safe fallback
+        return {"primary": "#000000", "secondary": "#007AFF"} 
 
 @app.post("/chat")
 async def chat_with_coach(request: ChatRequest):

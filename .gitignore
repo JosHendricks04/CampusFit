@@ -41,3 +41,17 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Hide my Python backend secrets
+.env
+campusfit-backend/.env
+
+# Python virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
