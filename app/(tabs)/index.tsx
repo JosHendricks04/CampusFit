@@ -39,7 +39,6 @@ import {
 } from 'react-native';
 
 // --- 1. CONFIGURATION ---
-// Updated to your live Render URL
 const SERVER_URL = "https://campusfit-backend.onrender.com";
 
 const DEFAULT_PRIMARY = "#000000"; 
@@ -49,6 +48,7 @@ const MAX_VOLUME_XP = 500;
 const XP_PER_1K_LBS = 15;    
 const CATEGORIES = ['Chest', 'Back', 'Legs', 'Arms', 'Shoulders', 'Core', 'Cardio', 'Full Body', 'Other'];
 
+// Achievement Badges Configuration
 const BADGES = [
   { id: 'first_lift', name: 'First Blood', icon: '🩸', condition: (s) => s.workoutsCompleted >= 1 },
   { id: '10k_club', name: '10k Club', icon: '🏋️', condition: (s) => s.totalVolume >= 10000 },
@@ -56,6 +56,7 @@ const BADGES = [
   { id: 'level_5', name: 'Varsity', icon: '⭐', condition: (s) => s.level >= 5 },
 ];
 
+// --- 2. DEFAULT EXERCISE DATABASE ---
 const DEFAULT_EXERCISES = [
   { id: 'arm_1', name: 'Barbell Curls', category: 'Arms' },
   { id: 'chest_1', name: 'Bench Press (Barbell)', category: 'Chest' },
@@ -1074,7 +1075,7 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
   );
 };
 
-// --- F: AI COACH CHAT SCREEN (UPDATED FOR PRODUCTION) ---
+// --- F: AI COACH CHAT SCREEN (FIXED FOR 422 ERROR) ---
 const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
   const initialMessage = { id: '1', role: 'ai', text: "Hey! I'm Coach AI. Ask me a fitness question, or tell me your goals to build a custom routine!" };
   const [messages, setMessages] = useState([initialMessage]);
@@ -1085,39 +1086,38 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
   const handleClearChat = () => {
     Alert.alert(
       "Clear Chat", 
-      "Are you sure you want to clear your conversation with Coach AI?", 
-      [
-        { text: "Cancel", style: "cancel" }, 
-        { 
-          text: "Clear", 
-          style: "destructive", 
-          onPress: () => { 
-            setMessages([initialMessage]); 
-            Vibration.vibrate(40); 
-          } 
-        }
-      ]
+      "Are you sure?", 
+      [{ text: "Cancel", style: "cancel" }, { text: "Clear", style: "destructive", onPress: () => setMessages([initialMessage]) }]
     );
   };
 
   const handleSend = async () => {
     if (!inputText.trim()) return;
     
-    // Updated: Capture the message and clear input
+    // Prepare the new user message object
     const userText = inputText.trim();
     const newUserMsg = { id: Date.now().toString(), role: 'user', text: userText };
     
-    setMessages(prev => [...prev, newUserMsg]);
+    // Create current history including the new message
+    const currentChatHistory = [...messages, newUserMsg];
+    
+    // UI Feedback
+    setMessages(currentChatHistory);
     setInputText("");
     setIsLoading(true);
 
     try {
-      // 🚨 FIX: Path must be exactly /chat and body must match Python backend
+      // 🚨 DATA FIX FOR 422 ERROR:
+      // We send a 'messages' array to match your Python ChatRequest/ChatMessage classes
       const response = await fetch(`${SERVER_URL}/chat`, {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
-        // Sending a single 'message' key to match FastAPI/Python expectations
-        body: JSON.stringify({ message: userText }) 
+        body: JSON.stringify({ 
+          messages: currentChatHistory.map(m => ({ 
+            role: m.role, 
+            text: m.text 
+          })) 
+        })
       });
       
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -1127,8 +1127,8 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
       const aiResponse = { 
         id: (Date.now() + 1).toString(), 
         role: 'ai', 
-        // Handle different response formats safely
-        text: typeof data.text === 'object' ? (data.text.text || "I've processed your request.") : (data.text || "Response received."), 
+        // Handles case where 'text' is an object or string
+        text: typeof data.text === 'object' ? data.text.text : (data.text || "Response received."), 
         workoutPlan: data.workoutPlan || null 
       };
       
@@ -1136,8 +1136,8 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
     } catch (error) {
       console.error("Coach AI Error:", error);
       Alert.alert(
-        "Coach is Warming Up", 
-        "Because this is a free server, the first message can take 60 seconds. Please try again in a moment."
+        "Coach Connection", 
+        "The Coach is warming up! Free servers can take 60s for the first request. Please try again."
       );
     } finally {
       setIsLoading(false);
