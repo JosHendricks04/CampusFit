@@ -39,7 +39,8 @@ import {
 } from 'react-native';
 
 // --- 1. CONFIGURATION ---
-const SERVER_URL = "https://campusfit-backend-xxxx.onrender.com";
+// Updated to your live Render URL
+const SERVER_URL = "https://campusfit-backend.onrender.com";
 
 const DEFAULT_PRIMARY = "#000000"; 
 const DEFAULT_SECONDARY = "#007AFF"; 
@@ -48,7 +49,6 @@ const MAX_VOLUME_XP = 500;
 const XP_PER_1K_LBS = 15;    
 const CATEGORIES = ['Chest', 'Back', 'Legs', 'Arms', 'Shoulders', 'Core', 'Cardio', 'Full Body', 'Other'];
 
-// 🚨 NEW: Achievement Badges Configuration
 const BADGES = [
   { id: 'first_lift', name: 'First Blood', icon: '🩸', condition: (s) => s.workoutsCompleted >= 1 },
   { id: '10k_club', name: '10k Club', icon: '🏋️', condition: (s) => s.totalVolume >= 10000 },
@@ -56,7 +56,6 @@ const BADGES = [
   { id: 'level_5', name: 'Varsity', icon: '⭐', condition: (s) => s.level >= 5 },
 ];
 
-// --- 2. DEFAULT EXERCISE DATABASE ---
 const DEFAULT_EXERCISES = [
   { id: 'arm_1', name: 'Barbell Curls', category: 'Arms' },
   { id: 'chest_1', name: 'Bench Press (Barbell)', category: 'Chest' },
@@ -921,7 +920,7 @@ const SocialScreen = ({ userInfo, themePrimary, themeSecondary }) => {
   );
 };
 
-// E. PROFILE (🚨 UPDATED WITH ACHIEVEMENTS & DELETE HISTORY)
+// E. PROFILE 
 const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory, themePrimary, themeSecondary }) => {
   const [selectedWorkout, setSelectedWorkout] = useState(null);
 
@@ -1001,7 +1000,6 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
         </View>
       </View>
 
-      {/* 🚨 NEW: Achievements Scroll View */}
       <Text style={styles.sectionHeader}>Achievements</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', marginBottom: 20, paddingBottom: 10 }}>
         {BADGES.map(b => {
@@ -1042,7 +1040,6 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
           key={i} 
           style={[styles.historyItemAction, { borderColor: themeSecondary + '20', borderWidth: 1 }]} 
           onPress={() => setSelectedWorkout(w)}
-          // 🚨 NEW: Delete history logic
           onLongPress={() => {
             Alert.alert("Delete Workout", "Are you sure you want to remove this from your history?", [
               { text: "Cancel", style: "cancel" },
@@ -1068,7 +1065,7 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
         </TouchableOpacity>
       ))}
 
-      <TouchableOpacity onPress={onReset} style={{ marginTop: 40, padding: 15, alignItems: 'center' }}>
+      <TouchableOpacity onPress={handleReset} style={{ marginTop: 40, padding: 15, alignItems: 'center' }}>
         <Text style={{ color: '#ff4444', fontWeight: 'bold' }}>Reset Profile</Text>
       </TouchableOpacity>
 
@@ -1077,7 +1074,7 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
   );
 };
 
-// --- F: AI COACH CHAT SCREEN ---
+// --- F: AI COACH CHAT SCREEN (UPDATED FOR PRODUCTION) ---
 const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
   const initialMessage = { id: '1', role: 'ai', text: "Hey! I'm Coach AI. Ask me a fitness question, or tell me your goals to build a custom routine!" };
   const [messages, setMessages] = useState([initialMessage]);
@@ -1106,18 +1103,21 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
   const handleSend = async () => {
     if (!inputText.trim()) return;
     
-    const newUserMsg = { id: Date.now().toString(), role: 'user', text: inputText };
-    const currentChatHistory = [...messages, newUserMsg];
+    // Updated: Capture the message and clear input
+    const userText = inputText.trim();
+    const newUserMsg = { id: Date.now().toString(), role: 'user', text: userText };
     
-    setMessages(currentChatHistory);
+    setMessages(prev => [...prev, newUserMsg]);
     setInputText("");
     setIsLoading(true);
 
     try {
+      // 🚨 FIX: Path must be exactly /chat and body must match Python backend
       const response = await fetch(`${SERVER_URL}/chat`, {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: currentChatHistory.map(m => ({ role: m.role, text: m.text })) })
+        // Sending a single 'message' key to match FastAPI/Python expectations
+        body: JSON.stringify({ message: userText }) 
       });
       
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -1127,14 +1127,18 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
       const aiResponse = { 
         id: (Date.now() + 1).toString(), 
         role: 'ai', 
-        text: typeof data.text === 'object' ? data.text.text : data.text, 
-        workoutPlan: data.workoutPlan 
+        // Handle different response formats safely
+        text: typeof data.text === 'object' ? (data.text.text || "I've processed your request.") : (data.text || "Response received."), 
+        workoutPlan: data.workoutPlan || null 
       };
       
       setMessages(prev => [...prev, aiResponse]);
     } catch (error) {
-      console.error("Fetch Error:", error);
-      Alert.alert("Connection Error", "Make sure your Python server is running and the SERVER_URL matches.");
+      console.error("Coach AI Error:", error);
+      Alert.alert(
+        "Coach is Warming Up", 
+        "Because this is a free server, the first message can take 60 seconds. Please try again in a moment."
+      );
     } finally {
       setIsLoading(false);
     }
@@ -1538,7 +1542,6 @@ export default function App() {
     setScreen('SOCIAL'); 
   };
 
-  // 🚨 NEW: Delete history logic
   const handleDeleteHistoryItem = (indexToDelete) => {
     const updatedHistory = [...history];
     updatedHistory.splice(indexToDelete, 1);
