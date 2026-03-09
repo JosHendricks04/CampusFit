@@ -4,20 +4,15 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
 
-# 🚨 NEW: Library to read your hidden .env file
+# Library to read your hidden .env file
 from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 # --- 1. SETUP API KEY ---
-# This looks for the .env file in the same folder as this script
 load_dotenv()
-
-# We pull the key from the environment instead of hardcoding it
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-
-# Make sure LangChain knows which key to use
 os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
 # --- 2. DEFINE THE STRUCTURED OUTPUTS (THE TOOLS) ---
@@ -43,8 +38,7 @@ class ColorResponse(BaseModel):
     secondary: str = Field(description="The secondary brand hex color (e.g., #FFCB05 for Michigan Maize)")
 
 # --- 3. INITIALIZE LANGCHAIN ---
-# Note: Ensure you have access to gemini-2.0-flash or the latest available model
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.2)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
 llm_with_tools = llm.bind_tools([WorkoutPlan])
 llm_colors = llm.with_structured_output(ColorResponse)
 
@@ -62,6 +56,7 @@ RULES:
 # --- 4. FASTAPI SETUP ---
 app = FastAPI()
 
+# origins=["*"] is essential for ngrok to work properly
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -84,16 +79,20 @@ class ColorRequest(BaseModel):
 
 @app.post("/get_school_color")
 async def get_school_color(request: ColorRequest):
+    print(f"🎨 Color Request for: {request.school_name}") # DEBUG PRINT
     try:
         prompt = f"What are the official primary and secondary brand hex colors for '{request.school_name}'? Be exact."
         color_data = llm_colors.invoke([HumanMessage(content=prompt)])
         return {"primary": color_data.primary, "secondary": color_data.secondary}
     except Exception as e:
-        print(f"Color Error: {e}")
+        print(f"❌ Color Error: {e}")
         return {"primary": "#000000", "secondary": "#007AFF"} 
 
 @app.post("/chat")
 async def chat_with_coach(request: ChatRequest):
+    # This print will show you exactly what your phone sends in the VS Code terminal
+    print(f"📩 Incoming Message History: {request.messages}") 
+    
     langchain_messages = [SystemMessage(content=SYSTEM_PROMPT)]
     
     for msg in request.messages:
@@ -103,24 +102,29 @@ async def chat_with_coach(request: ChatRequest):
         elif msg.role == "ai":
             langchain_messages.append(AIMessage(content=safe_text))
 
-    response = llm_with_tools.invoke(langchain_messages)
+    try:
+        response = llm_with_tools.invoke(langchain_messages)
 
-    if response.tool_calls:
-        tool_call = response.tool_calls[0]
-        workout_data = tool_call["args"]
-        
-        return {
-            "text": "I've put together a routine based on your goals. Save it to your templates if you like it!",
-            "workoutPlan": workout_data
-        }
-    else:
-        content = response.content
-        if isinstance(content, list):
-            safe_response = " ".join([str(block.get("text", "")) for block in content if isinstance(block, dict) and "text" in block])
+        if response.tool_calls:
+            tool_call = response.tool_calls[0]
+            workout_data = tool_call["args"]
+            print("🏋️ Workout Tool Triggered!") # DEBUG PRINT
+            return {
+                "text": "I've put together a routine based on your goals. Save it to your templates if you like it!",
+                "workoutPlan": workout_data
+            }
         else:
-            safe_response = str(content)
+            content = response.content
+            if isinstance(content, list):
+                safe_response = " ".join([str(block.get("text", "")) for block in content if isinstance(block, dict) and "text" in block])
+            else:
+                safe_response = str(content)
 
-        return {
-            "text": safe_response,
-            "workoutPlan": None
-        }
+            print(f"🤖 Coach Response: {safe_response[:50]}...") # DEBUG PRINT
+            return {
+                "text": safe_response,
+                "workoutPlan": None
+            }
+    except Exception as e:
+        print(f"❌ AI Error: {e}")
+        return {"text": "Sorry, I'm having trouble connecting to my brain right now. Please try again!", "workoutPlan": None}
