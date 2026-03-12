@@ -2,9 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useReducer, useRef, useState } from 'react';
 
 import { initializeApp } from "firebase/app";
-import { addDoc, collection, getDocs, getFirestore, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection, doc, getDocs, getFirestore, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
-// Your Campus Fit project configuration (Now Secured!)
+// Your Campus Fit project configuration
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -39,16 +39,17 @@ import {
 } from 'react-native';
 
 // --- 1. CONFIGURATION ---
-const SERVER_URL = "https://campusfit-backend.onrender.com";
+const SERVER_URL = "https://thirty-symbols-say.loca.lt";
 
 const DEFAULT_PRIMARY = "#000000"; 
 const DEFAULT_SECONDARY = "#007AFF"; 
 const BASE_WORKOUT_XP = 150; 
 const MAX_VOLUME_XP = 500;   
-const XP_PER_1K_LBS = 15;    
+const XP_PER_1K_LBS = 15;
+// 🚨 NEW: The Cardio XP Multiplier!
+const XP_PER_CARDIO_MIN = 6;    
 const CATEGORIES = ['Chest', 'Back', 'Legs', 'Arms', 'Shoulders', 'Core', 'Cardio', 'Full Body', 'Other'];
 
-// Achievement Badges Configuration
 const BADGES = [
   { id: 'first_lift', name: 'First Blood', icon: '🩸', condition: (s) => s.workoutsCompleted >= 1 },
   { id: '10k_club', name: '10k Club', icon: '🏋️', condition: (s) => s.totalVolume >= 10000 },
@@ -56,8 +57,11 @@ const BADGES = [
   { id: 'level_5', name: 'Varsity', icon: '⭐', condition: (s) => s.level >= 5 },
 ];
 
-// --- 2. DEFAULT EXERCISE DATABASE ---
 const DEFAULT_EXERCISES = [
+  { id: 'cardio_1', name: 'Running (Treadmill)', category: 'Cardio' },
+  { id: 'cardio_2', name: 'Stairmaster', category: 'Cardio' },
+  { id: 'cardio_3', name: 'Swimming', category: 'Cardio' },
+  { id: 'cardio_4', name: 'Cycling (Stationary)', category: 'Cardio' },
   { id: 'arm_1', name: 'Barbell Curls', category: 'Arms' },
   { id: 'chest_1', name: 'Bench Press (Barbell)', category: 'Chest' },
   { id: 'chest_9', name: 'Bench Press (Dumbbell)', category: 'Chest'},
@@ -94,6 +98,9 @@ const DEFAULT_EXERCISES = [
 function calculateTotalVolume(workout) {
   let total = 0;
   workout.exercises.forEach((ex) => {
+    // Skip volume math for Cardio exercises so stats stay accurate!
+    if (ex.category === 'Cardio') return;
+
     ex.sets.forEach((set) => {
       const isCompleted = set.completed !== undefined ? set.completed : true; 
       if (isCompleted || workout.isTemplate) {
@@ -142,7 +149,8 @@ const workoutReducer = (state, action) => {
           ...state.exercises, 
           { 
             id: Date.now().toString() + Math.random(), 
-            name: action.payload.name, 
+            name: action.payload.name,
+            category: action.payload.category || 'Other',
             sets: action.payload.initialSets || [{ 
               id: Date.now().toString(), 
               reps: '', 
@@ -166,7 +174,6 @@ const workoutReducer = (state, action) => {
     case 'ADD_SET': {
       const updatedExercises = state.exercises.map((ex, eIndex) => {
         if (eIndex !== action.payload.exerciseIndex) return ex;
-        
         const lastSet = ex.sets[ex.sets.length - 1];
         return { 
           ...ex, 
@@ -188,11 +195,9 @@ const workoutReducer = (state, action) => {
     case 'REMOVE_SET': {
       const updatedExercises = state.exercises.map((ex, eIndex) => {
         if (eIndex !== action.payload.exerciseIndex) return ex;
-        
         const updatedSets = ex.sets.filter((_, sIndex) => sIndex !== action.payload.setIndex);
         return { ...ex, sets: updatedSets };
       });
-      
       const newVolume = calculateTotalVolume({ ...state, exercises: updatedExercises });
       return { ...state, exercises: updatedExercises, totalVolumeLbs: newVolume };
     }
@@ -200,15 +205,12 @@ const workoutReducer = (state, action) => {
     case 'UPDATE_SET': {
       const updatedExercises = state.exercises.map((ex, eIndex) => {
         if (eIndex !== action.payload.exerciseIndex) return ex;
-        
         const updatedSets = ex.sets.map((set, sIndex) => {
           if (sIndex !== action.payload.setIndex) return set;
           return { ...set, [action.payload.field]: action.payload.value };
         });
-        
         return { ...ex, sets: updatedSets };
       });
-      
       const newVolume = calculateTotalVolume({ ...state, exercises: updatedExercises });
       return { ...state, exercises: updatedExercises, totalVolumeLbs: newVolume };
     }
@@ -216,7 +218,6 @@ const workoutReducer = (state, action) => {
     case 'TOGGLE_COMPLETE': {
       const updatedExercises = state.exercises.map((ex, eIndex) => {
         if (eIndex !== action.payload.exerciseIndex) return ex;
-        
         const updatedSets = [...ex.sets];
         const currentSet = updatedSets[action.payload.setIndex];
         const isCompleting = !currentSet.completed; 
@@ -236,14 +237,11 @@ const workoutReducer = (state, action) => {
             };
           }
         }
-        
         return { ...ex, sets: updatedSets };
       });
-      
       const newVolume = calculateTotalVolume({ ...state, exercises: updatedExercises });
       return { ...state, exercises: updatedExercises, totalVolumeLbs: newVolume };
     }
-    
     default: 
       return state;
   }
@@ -319,6 +317,8 @@ const CalendarIcon = ({ themeSecondary }) => {
 
 // --- 7. COMPONENT: EXERCISE CARD ---
 const ExerciseCard = ({ exercise, exIndex, dispatch, themePrimary, themeSecondary, isEditingTemplate = false }) => {
+  const isCardio = exercise.category === 'Cardio';
+
   return (
     <View style={styles.card}>
       <View style={styles.header}>
@@ -330,14 +330,12 @@ const ExerciseCard = ({ exercise, exIndex, dispatch, themePrimary, themeSecondar
           <Text style={styles.deleteText}>✕</Text>
         </TouchableOpacity>
       </View>
-      
       <View style={styles.rowHeader}>
-        <Text style={styles.colLabel}>LBS</Text>
-        <Text style={styles.colLabel}>{isEditingTemplate ? "TARGET REPS" : "REPS"}</Text>
+        <Text style={styles.colLabel}>{isCardio ? "MINS" : "LBS"}</Text>
+        <Text style={styles.colLabel}>{isEditingTemplate ? "TARGET" : (isCardio ? "DIST/LVL" : "REPS")}</Text>
         {!isEditingTemplate && <Text style={styles.colLabel}>DONE</Text>}
         <View style={{ width: 30, marginLeft: 8 }} /> 
       </View>
-      
       {exercise.sets.map((set, setIndex) => (
         <View 
           key={set.id} 
@@ -346,7 +344,7 @@ const ExerciseCard = ({ exercise, exIndex, dispatch, themePrimary, themeSecondar
           <TextInput 
             style={styles.input} 
             placeholder="0" 
-            keyboardType="numeric" 
+            keyboardType={isCardio ? "default" : "numeric"} 
             value={set.weightLbs} 
             onChangeText={(v) => dispatch({ type: 'UPDATE_SET', payload: { exerciseIndex: exIndex, setIndex, field: 'weightLbs', value: v }})} 
             editable={!set.completed || isEditingTemplate} 
@@ -354,7 +352,7 @@ const ExerciseCard = ({ exercise, exIndex, dispatch, themePrimary, themeSecondar
           <TextInput 
             style={styles.input} 
             placeholder="0" 
-            keyboardType="numeric" 
+            keyboardType={isCardio ? "default" : "numeric"} 
             value={isEditingTemplate ? (set.targetReps?.toString() || set.reps?.toString()) : set.reps} 
             onChangeText={(v) => dispatch({ 
               type: 'UPDATE_SET', 
@@ -362,7 +360,6 @@ const ExerciseCard = ({ exercise, exIndex, dispatch, themePrimary, themeSecondar
             })} 
             editable={!set.completed || isEditingTemplate} 
           />
-          
           {!isEditingTemplate && (
             <TouchableOpacity 
               style={[styles.checkbox, set.completed && { backgroundColor: themeSecondary }]}
@@ -376,7 +373,6 @@ const ExerciseCard = ({ exercise, exIndex, dispatch, themePrimary, themeSecondar
               )}
             </TouchableOpacity>
           )}
-          
           <TouchableOpacity 
             style={styles.deleteSetBtn} 
             onPress={() => dispatch({ type: 'REMOVE_SET', payload: { exerciseIndex: exIndex, setIndex }})}
@@ -385,12 +381,13 @@ const ExerciseCard = ({ exercise, exIndex, dispatch, themePrimary, themeSecondar
           </TouchableOpacity>
         </View>
       ))}
-      
       <TouchableOpacity 
         style={[styles.addSetBtn, { backgroundColor: themeSecondary + '15' }]} 
         onPress={() => dispatch({ type: 'ADD_SET', payload: { exerciseIndex: exIndex }})}
       >
-        <Text style={[styles.addSetText, { color: themeSecondary }]}>+ Add Set</Text>
+        <Text style={[styles.addSetText, { color: themeSecondary }]}>
+          {isCardio ? "+ Add Interval" : "+ Add Set"}
+        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -406,19 +403,19 @@ const OnboardingScreen = ({ onComplete }) => {
 
   const handleStart = async () => {
     Keyboard.dismiss();
-    
     if (name.trim() && school.trim()) {
       setIsJoining(true); 
       let finalPrimary = DEFAULT_PRIMARY;
       let finalSecondary = DEFAULT_SECONDARY; 
-      
       try {
         const response = await fetch(`${SERVER_URL}/get_school_color`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Bypass-Tunnel-Reminder': 'true'
+          },
           body: JSON.stringify({ school_name: school.trim() })
         });
-        
         if (response.ok) {
           const data = await response.json();
           if (data.primary && data.secondary) {
@@ -429,7 +426,6 @@ const OnboardingScreen = ({ onComplete }) => {
       } catch (error) {
         console.log("Could not fetch school color automatically.", error);
       }
-
       setIsJoining(false);
       const newFriendCode = generateFriendCode();
       onComplete(name, school.trim(), { primary: finalPrimary, secondary: finalSecondary }, newFriendCode);
@@ -444,7 +440,6 @@ const OnboardingScreen = ({ onComplete }) => {
         <View style={styles.onboardingCard}>
           <Text style={styles.onboardingTitle}>Welcome to Campus Fit 🎓</Text>
           <Text style={styles.onboardingSub}>Join your campus leaderboard.</Text>
-          
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Your Name</Text>
             <TextInput 
@@ -454,7 +449,6 @@ const OnboardingScreen = ({ onComplete }) => {
               onChangeText={setName} 
             />
           </View>
-          
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Your School</Text>
             <TextInput 
@@ -464,7 +458,6 @@ const OnboardingScreen = ({ onComplete }) => {
               onChangeText={setSchool} 
             />
           </View>
-          
           <TouchableOpacity 
             style={[styles.bigStartBtn, isJoining && { backgroundColor: '#999' }]} 
             onPress={handleStart} 
@@ -486,11 +479,9 @@ const OnboardingScreen = ({ onComplete }) => {
 const HomeScreen = ({ userStats, userInfo, onStartWorkout, savedTemplates, onStartTemplate, onEditTemplate, onDeleteTemplate, themePrimary, themeSecondary }) => {
   const nextLevelXP = 10000;
   const progress = (userStats.currentXP / nextLevelXP) * 100;
-
   return (
     <ScrollView contentContainerStyle={{ padding: 20 }}>
       <Text style={styles.screenTitle}>Hey, {userInfo.name}!</Text>
-      
       <View style={styles.levelCard}>
         <View style={styles.levelRow}>
           <Text style={styles.levelLabel}>Level {userStats.level}</Text>
@@ -501,7 +492,6 @@ const HomeScreen = ({ userStats, userInfo, onStartWorkout, savedTemplates, onSta
         </View>
         <Text style={styles.xpText}>Next Rank at {nextLevelXP.toLocaleString()} XP</Text>
       </View>
-
       <View style={styles.grid}>
         <View style={[styles.statSquare, { borderColor: themeSecondary + '30', borderWidth: 1 }]}>
           <Text style={styles.statEmoji}>🔥</Text>
@@ -514,14 +504,12 @@ const HomeScreen = ({ userStats, userInfo, onStartWorkout, savedTemplates, onSta
           <Text style={styles.statSub}>This Week</Text>
         </View>
       </View>
-
       <TouchableOpacity 
         style={[styles.bigStartBtn, { backgroundColor: themePrimary, marginBottom: 30 }]} 
         onPress={onStartWorkout}
       >
         <Text style={[styles.bigStartText, styles.textOutline]}>START EMPTY WORKOUT</Text>
       </TouchableOpacity>
-
       {savedTemplates && savedTemplates.length > 0 && (
         <View style={{ marginTop: 10 }}>
           <Text style={styles.sectionHeader}>Your Templates</Text>
@@ -531,7 +519,6 @@ const HomeScreen = ({ userStats, userInfo, onStartWorkout, savedTemplates, onSta
                 <View style={[styles.templateCard, { borderColor: themeSecondary + '50' }]}>
                   <Text style={styles.templateName}>{tmpl.name}</Text>
                   <Text style={styles.templateSub}>{tmpl.exercises.length} Exercises</Text>
-                  
                   <View style={{ flexDirection: 'row', gap: 10 }}>
                     <TouchableOpacity 
                       style={[styles.startTmplBtn, { backgroundColor: themeSecondary + '15', flex: 1 }]}
@@ -539,7 +526,6 @@ const HomeScreen = ({ userStats, userInfo, onStartWorkout, savedTemplates, onSta
                     >
                       <Text style={{ color: themeSecondary, fontWeight: 'bold', fontSize: 12 }}>START</Text>
                     </TouchableOpacity>
-                    
                     <TouchableOpacity 
                       style={[styles.startTmplBtn, { backgroundColor: '#f0f0f0', flex: 1 }]}
                       onPress={() => onEditTemplate(tmpl, i)}
@@ -556,7 +542,6 @@ const HomeScreen = ({ userStats, userInfo, onStartWorkout, savedTemplates, onSta
           </View>
         </View>
       )}
-
     </ScrollView>
   );
 };
@@ -594,15 +579,30 @@ const ActiveWorkoutScreen = ({ onFinish, onCancel, themePrimary, themeSecondary,
     if (workout.totalVolumeLbs === 0 && workout.exercises.length === 0) {
       return Alert.alert("Empty Workout", "Log something first!");
     }
-    
     Vibration.vibrate([0, 200, 100, 200]); 
+    
+    // 1. Base + Lifting XP
     const base = BASE_WORKOUT_XP;
     const volXP = Math.min(Math.floor(workout.totalVolumeLbs / 1000) * XP_PER_1K_LBS, MAX_VOLUME_XP);
     
+    // 2. 🚨 NEW: Cardio XP Logic
+    let cardioMinutes = 0;
+    workout.exercises.forEach(ex => {
+      if (ex.category === 'Cardio') {
+        ex.sets.forEach(set => {
+          if (set.completed) {
+            cardioMinutes += Number(set.weightLbs) || 0; 
+          }
+        });
+      }
+    });
+    const cardioXP = cardioMinutes * XP_PER_CARDIO_MIN;
+
+    // 3. Finalize
     onFinish({
       name: workout.name, 
-      xpEarned: base + volXP, 
-      volume: workout.totalVolumeLbs,
+      xpEarned: base + volXP + cardioXP, // Mixes them together nicely
+      volume: workout.totalVolumeLbs, 
       date: new Date().toLocaleDateString(), 
       exercises: workout.exercises 
     });
@@ -611,7 +611,6 @@ const ActiveWorkoutScreen = ({ onFinish, onCancel, themePrimary, themeSecondary,
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 100 }} keyboardShouldPersistTaps="handled">
-        
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
           <Text style={[styles.screenTitle, { marginBottom: 0, flex: 1, marginRight: 15 }]} numberOfLines={2} adjustsFontSizeToFit>
             {workout.name}
@@ -620,13 +619,10 @@ const ActiveWorkoutScreen = ({ onFinish, onCancel, themePrimary, themeSecondary,
             <Text style={{ color: 'red', fontWeight: 'bold', fontSize: 16 }}>Cancel</Text>
           </TouchableOpacity>
         </View>
-
         <RestTimer themePrimary={themePrimary} themeSecondary={themeSecondary} />
-
         {workout.exercises.length === 0 && (
           <Text style={{ textAlign:'center', color:'#999', marginTop:40 }}>Tap + Add Exercise to begin</Text>
         )}
-        
         {workout.exercises.map((ex, index) => (
           <ExerciseCard 
             key={ex.id} 
@@ -637,28 +633,24 @@ const ActiveWorkoutScreen = ({ onFinish, onCancel, themePrimary, themeSecondary,
             themeSecondary={themeSecondary} 
           />
         ))}
-        
         <TouchableOpacity 
           style={[styles.addExBtn, { borderColor: themeSecondary }]} 
           onPress={() => setShowPicker(true)}
         >
           <Text style={[styles.addExText, { color: themeSecondary }]}>+ Add Exercise</Text>
         </TouchableOpacity>
-
       </ScrollView>
-
       <TouchableOpacity 
         style={[styles.finishBtn, { backgroundColor: themePrimary }]} 
         onPress={handleFinishPress}
       >
         <Text style={[styles.finishText, styles.textOutline]}>FINISH WORKOUT</Text>
       </TouchableOpacity>
-      
       <ExercisePicker 
         visible={showPicker} 
         onClose={() => setShowPicker(false)} 
-        onSelect={(name) => { 
-          dispatch({ type: 'ADD_EXERCISE', payload: { name } }); 
+        onSelect={(item) => { 
+          dispatch({ type: 'ADD_EXERCISE', payload: { name: item.name, category: item.category } }); 
           setShowPicker(false); 
         }} 
         exerciseDB={exerciseDB} 
@@ -698,7 +690,6 @@ const EditTemplateScreen = ({ onSave, onCancel, themePrimary, themeSecondary, in
   const handleSavePress = () => {
     if (workout.name.trim() === '') return Alert.alert("Hold on", "Template needs a name!");
     Vibration.vibrate([0, 100, 50, 100]); 
-    
     const cleanedExercises = workout.exercises.map(ex => ({
       ...ex,
       sets: ex.sets.map(s => ({
@@ -708,7 +699,6 @@ const EditTemplateScreen = ({ onSave, onCancel, themePrimary, themeSecondary, in
         completed: false
       }))
     }));
-
     onSave({
       name: workout.name, 
       exercises: cleanedExercises 
@@ -718,7 +708,6 @@ const EditTemplateScreen = ({ onSave, onCancel, themePrimary, themeSecondary, in
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 100 }} keyboardShouldPersistTaps="handled">
-        
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <TextInput 
             style={[styles.screenTitle, { marginBottom: 0, flex: 1, marginRight: 15, borderBottomWidth: 1, borderColor: '#ccc' }]} 
@@ -730,11 +719,9 @@ const EditTemplateScreen = ({ onSave, onCancel, themePrimary, themeSecondary, in
             <Text style={{ color: 'red', fontWeight: 'bold', fontSize: 16 }}>Cancel</Text>
           </TouchableOpacity>
         </View>
-
         {workout.exercises.length === 0 && (
           <Text style={{ textAlign:'center', color:'#999', marginTop:40 }}>Tap + Add Exercise to build template</Text>
         )}
-        
         {workout.exercises.map((ex, index) => (
           <ExerciseCard 
             key={ex.id} 
@@ -746,28 +733,24 @@ const EditTemplateScreen = ({ onSave, onCancel, themePrimary, themeSecondary, in
             isEditingTemplate={true} 
           />
         ))}
-        
         <TouchableOpacity 
           style={[styles.addExBtn, { borderColor: themeSecondary }]} 
           onPress={() => setShowPicker(true)}
         >
           <Text style={[styles.addExText, { color: themeSecondary }]}>+ Add Exercise</Text>
         </TouchableOpacity>
-
       </ScrollView>
-
       <TouchableOpacity 
         style={[styles.finishBtn, { backgroundColor: themePrimary }]} 
         onPress={handleSavePress}
       >
         <Text style={[styles.finishText, styles.textOutline]}>SAVE TEMPLATE</Text>
       </TouchableOpacity>
-      
       <ExercisePicker 
         visible={showPicker} 
         onClose={() => setShowPicker(false)} 
-        onSelect={(name) => { 
-          dispatch({ type: 'ADD_EXERCISE', payload: { name } }); 
+        onSelect={(item) => { 
+          dispatch({ type: 'ADD_EXERCISE', payload: { name: item.name, category: item.category } }); 
           setShowPicker(false); 
         }} 
         exerciseDB={exerciseDB} 
@@ -802,34 +785,28 @@ const SocialScreen = ({ userInfo, themePrimary, themeSecondary }) => {
 
   const fetchRankings = async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, "workouts"));
-      const userTotals = {};
-
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        const userKey = `${data.user_name}-${data.user_school}`; 
-        
-        if (!userTotals[userKey]) {
-          userTotals[userKey] = { 
-            id: userKey, 
-            name: data.user_name || "Unknown", 
-            school: data.user_school || "Unknown", 
-            xp: 0, 
-            code: data.user_code || "", 
-            isMe: data.user_name === userInfo.name 
-          };
-        }
-        userTotals[userKey].xp += (data.xp_earned || 0);
+      const querySnapshot = await getDocs(collection(db, "users"));
+      const usersList = [];
+      
+      querySnapshot.forEach((document) => {
+        const data = document.data();
+        usersList.push({
+          id: data.friendCode,
+          name: data.name || "Unknown",
+          school: data.school || "Unknown",
+          xp: data.totalXP || 0,
+          code: data.friendCode || "",
+          isMe: data.friendCode === userInfo.friendCode
+        });
       });
 
-      let sortedBoard = Object.values(userTotals).sort((a, b) => b.xp - a.xp);
-
+      let sortedBoard = usersList.sort((a, b) => b.xp - a.xp);
+      
       if (viewMode === 'friends') {
         sortedBoard = sortedBoard.filter(user => 
           user.isMe || friendCodes.includes(user.code)
         );
       }
-
       setLiveUsers(sortedBoard);
     } catch (error) { 
       console.error("Error fetching leaderboard:", error); 
@@ -861,7 +838,6 @@ const SocialScreen = ({ userInfo, themePrimary, themeSecondary }) => {
   return (
     <View style={{ flex: 1, padding: 20, paddingBottom: 0 }}>
       <Text style={styles.screenTitle}>Live Campus Rank</Text>
-      
       <View style={styles.segmentedControl}>
         <TouchableOpacity 
           style={[styles.segmentBtn, viewMode === 'global' && {backgroundColor: themePrimary}]}
@@ -876,7 +852,6 @@ const SocialScreen = ({ userInfo, themePrimary, themeSecondary }) => {
           <Text style={[styles.segmentText, viewMode === 'friends' && {color: 'white'}]}>Friends Only</Text>
         </TouchableOpacity>
       </View>
-
       {viewMode === 'friends' && (
         <View style={{flexDirection: 'row', marginBottom: 15, gap: 10}}>
           <TextInput 
@@ -891,7 +866,6 @@ const SocialScreen = ({ userInfo, themePrimary, themeSecondary }) => {
           </TouchableOpacity>
         </View>
       )}
-
       {loadingRank ? (
         <ActivityIndicator size="large" color={themePrimary} style={{ marginTop: 50 }} />
       ) : (
@@ -924,7 +898,6 @@ const SocialScreen = ({ userInfo, themePrimary, themeSecondary }) => {
 // E. PROFILE 
 const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory, themePrimary, themeSecondary }) => {
   const [selectedWorkout, setSelectedWorkout] = useState(null);
-
   const recentHistory = history.slice(0, 7).reverse(); 
   const maxChartVolume = Math.max(...recentHistory.map(w => w.volume), 1); 
 
@@ -940,9 +913,7 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
                 <Text style={styles.closeTextBlack}>Close</Text>
               </TouchableOpacity>
             </View>
-            
             <Text style={styles.historyModalDate}>{selectedWorkout.date} • {selectedWorkout.volume} lbs volume</Text>
-            
             <ScrollView style={{ marginTop: 20 }} showsVerticalScrollIndicator={false}>
               {selectedWorkout.exercises && selectedWorkout.exercises.map((ex, i) => (
                 <View key={i} style={[styles.historyExCard, { borderColor: themeSecondary + '40' }]}>
@@ -951,7 +922,7 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
                     <View key={sIndex} style={styles.historySetRow}>
                       <Text style={styles.historySetText}>Set {sIndex + 1}</Text>
                       <Text style={styles.historySetDetails}>
-                        {set.completed ? '✅' : '❌'} {set.weightLbs || 0} lbs × {set.reps || 0} reps
+                        {set.completed ? '✅' : '❌'} {set.weightLbs || 0} {ex.category === 'Cardio' ? 'mins' : 'lbs'} × {set.reps || 0} {ex.category === 'Cardio' ? 'dist' : 'reps'}
                       </Text>
                     </View>
                   ))}
@@ -981,7 +952,6 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
           <Text style={{fontWeight: 'bold', color: '#666'}}>Friend Code: {userInfo.friendCode || 'NONE'}</Text>
         </View>
       </View>
-
       <Text style={styles.sectionHeader}>Lifetime Stats</Text>
       <View style={styles.grid}>
         <View style={[styles.statSquare, { borderColor: themePrimary + '20', borderWidth: 1 }]}>
@@ -1000,7 +970,6 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
           <Text style={styles.statSub}>Wk Streak</Text>
         </View>
       </View>
-
       <Text style={styles.sectionHeader}>Achievements</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', marginBottom: 20, paddingBottom: 10 }}>
         {BADGES.map(b => {
@@ -1013,7 +982,6 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
           )
         })}
       </ScrollView>
-
       {recentHistory.length > 0 && (
         <View style={{marginTop: 10, marginBottom: 20}}>
           <Text style={styles.sectionHeader}>Volume History</Text>
@@ -1032,10 +1000,8 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
           </View>
         </View>
       )}
-
       <Text style={styles.sectionHeader}>Recent History (Long Press to Delete)</Text>
       {history.length === 0 && <Text style={{ color: '#999' }}>No workouts finished yet!</Text>}
-      
       {history.slice(0, 10).map((w, i) => (
         <TouchableOpacity 
           key={i} 
@@ -1065,17 +1031,15 @@ const ProfileScreen = ({ userStats, history, userInfo, onReset, onDeleteHistory,
           </View>
         </TouchableOpacity>
       ))}
-
-      <TouchableOpacity onPress={handleReset} style={{ marginTop: 40, padding: 15, alignItems: 'center' }}>
+      <TouchableOpacity onPress={onReset} style={{ marginTop: 40, padding: 15, alignItems: 'center' }}>
         <Text style={{ color: '#ff4444', fontWeight: 'bold' }}>Reset Profile</Text>
       </TouchableOpacity>
-
       {renderHistoryModal()}
     </ScrollView>
   );
 };
 
-// --- F: AI COACH CHAT SCREEN (FIXED FOR 422 ERROR) ---
+// --- F: AI COACH CHAT SCREEN ---
 const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
   const initialMessage = { id: '1', role: 'ai', text: "Hey! I'm Coach AI. Ask me a fitness question, or tell me your goals to build a custom routine!" };
   const [messages, setMessages] = useState([initialMessage]);
@@ -1093,25 +1057,20 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
 
   const handleSend = async () => {
     if (!inputText.trim()) return;
-    
-    // Prepare the new user message object
     const userText = inputText.trim();
     const newUserMsg = { id: Date.now().toString(), role: 'user', text: userText };
-    
-    // Create current history including the new message
     const currentChatHistory = [...messages, newUserMsg];
-    
-    // UI Feedback
     setMessages(currentChatHistory);
     setInputText("");
     setIsLoading(true);
 
     try {
-      // 🚨 DATA FIX FOR 422 ERROR:
-      // We send a 'messages' array to match your Python ChatRequest/ChatMessage classes
       const response = await fetch(`${SERVER_URL}/chat`, {
         method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Bypass-Tunnel-Reminder': 'true' 
+        },
         body: JSON.stringify({ 
           messages: currentChatHistory.map(m => ({ 
             role: m.role, 
@@ -1119,25 +1078,20 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
           })) 
         })
       });
-      
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      
       const data = await response.json();
-      
       const aiResponse = { 
         id: (Date.now() + 1).toString(), 
         role: 'ai', 
-        // Handles case where 'text' is an object or string
         text: typeof data.text === 'object' ? data.text.text : (data.text || "Response received."), 
         workoutPlan: data.workoutPlan || null 
       };
-      
       setMessages(prev => [...prev, aiResponse]);
     } catch (error) {
       console.error("Coach AI Error:", error);
       Alert.alert(
         "Coach Connection", 
-        "The Coach is warming up! Free servers can take 60s for the first request. Please try again."
+        "Check that localtunnel is running and SERVER_URL is updated. First load can take 60s."
       );
     } finally {
       setIsLoading(false);
@@ -1160,7 +1114,6 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
       }));
       return { name: `${aiPlan.plan_name} - ${day.day_name}`, exercises: mappedExercises };
     });
-    
     onImportPlan(newTemplatesArray);
   };
 
@@ -1173,21 +1126,23 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
             {item.text}
           </Text>
         </View>
-        
         {item.workoutPlan && (
           <View style={[styles.planCard, { borderColor: themeSecondary, borderWidth: 1 }]}>
             <Text style={styles.planCardTitle}>{item.workoutPlan.plan_name}</Text>
             <Text style={styles.planCardSub}>{item.workoutPlan.description}</Text>
-            
             {item.workoutPlan.schedule.map((day, dayIndex) => (
               <View key={dayIndex} style={styles.planCardPreview}>
                 <Text style={{ fontWeight: 'bold', marginBottom: 5 }}>{day.day_name}</Text>
-                {day.exercises.map((ex, i) => (
-                  <Text key={i} style={styles.previewText}>• {ex.sets}x{ex.reps} {ex.name}</Text>
-                ))}
+                {day.exercises.map((ex, i) => {
+                  const isCardio = ex.category === 'Cardio';
+                  const setString = isCardio ? `${ex.sets} intervals` : `${ex.sets}x${ex.reps}`;
+                  const distString = isCardio ? ` (${ex.reps})` : '';
+                  return (
+                    <Text key={i} style={styles.previewText}>• {setString} {ex.name}{distString}</Text>
+                  );
+                })}
               </View>
             ))}
-            
             <TouchableOpacity 
               style={[styles.importBtn, { backgroundColor: themePrimary }]} 
               onPress={() => handleImport(item.workoutPlan)}
@@ -1212,7 +1167,6 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
           <Text style={styles.clearChatText}>Clear</Text>
         </TouchableOpacity>
       </View>
-      
       <FlatList 
         ref={flatListRef} 
         data={messages} 
@@ -1221,9 +1175,7 @@ const AICoachScreen = ({ themePrimary, themeSecondary, onImportPlan }) => {
         contentContainerStyle={{ padding: 20 }} 
         onContentSizeChange={() => flatListRef.current?.scrollToEnd()} 
       />
-
       {isLoading && <ActivityIndicator style={{ marginBottom: 10 }} color={themeSecondary} />}
-
       <View style={styles.chatInputContainer}>
         <TextInput 
           style={styles.chatInput} 
@@ -1252,7 +1204,6 @@ const ExercisePicker = ({ visible, onClose, onSelect, exerciseDB, themePrimary, 
   const [editingId, setEditingId] = useState(null); 
   const [newName, setNewName] = useState('');
   const [newCategory, setNewCategory] = useState('Chest');
-
   const filtered = exerciseDB.filter(ex => ex.name.toLowerCase().includes(search.toLowerCase()));
 
   const handleClose = () => { 
@@ -1262,49 +1213,35 @@ const ExercisePicker = ({ visible, onClose, onSelect, exerciseDB, themePrimary, 
     setNewName(''); 
     onClose(); 
   };
-  
   const handleOpenCreate = () => { 
     setEditingId(null); 
     setNewName(''); 
     setNewCategory('Chest'); 
     setIsAdding(true); 
   };
-  
   const handleOpenEdit = (item) => { 
     setEditingId(item.id); 
     setNewName(item.name); 
     setNewCategory(CATEGORIES.includes(item.category) ? item.category : 'Other'); 
     setIsAdding(true); 
   };
-
   const handleSave = () => {
     if (!newName.trim()) return Alert.alert("Hold on", "Please enter an exercise name!");
-    
     if (editingId) { 
       onUpdateCustom(editingId, newName.trim(), newCategory); 
     } else { 
       onAddCustom({ name: newName.trim(), category: newCategory }); 
-      onSelect(newName.trim()); 
+      onSelect({ name: newName.trim(), category: newCategory }); 
     }
-    
     setNewName(''); 
     setSearch(''); 
     setEditingId(null); 
     setIsAdding(false);
   };
-
   const handleDelete = () => {
-    Alert.alert("Delete Exercise", "Are you sure you want to remove this from your database?", [
+    Alert.alert("Delete Exercise", "Are you sure?", [
       { text: "Cancel", style: "cancel" }, 
-      { 
-        text: "Delete", 
-        style: "destructive", 
-        onPress: () => { 
-          onDeleteCustom(editingId); 
-          setIsAdding(false); 
-          setEditingId(null); 
-        }
-      }
+      { text: "Delete", style: "destructive", onPress: () => { onDeleteCustom(editingId); setIsAdding(false); setEditingId(null); } }
     ]);
   };
 
@@ -1312,84 +1249,42 @@ const ExercisePicker = ({ visible, onClose, onSelect, exerciseDB, themePrimary, 
     <Modal animationType="slide" visible={visible} presentationStyle="pageSheet">
       <View style={styles.pickerContainer}>
         <View style={styles.pickerHeader}>
-          <Text style={styles.pickerTitle}>
-            {editingId ? "Edit Exercise" : (isAdding ? "Create Custom" : "Choose Exercise")}
-          </Text>
-          <TouchableOpacity onPress={handleClose}>
-            <Text style={styles.closeTextBlack}>Close</Text>
-          </TouchableOpacity>
+          <Text style={styles.pickerTitle}>{editingId ? "Edit" : (isAdding ? "Create" : "Choose Exercise")}</Text>
+          <TouchableOpacity onPress={handleClose}><Text style={styles.closeTextBlack}>Close</Text></TouchableOpacity>
         </View>
-
         {!isAdding ? (
           <>
-            <TextInput 
-              style={styles.searchBar} 
-              placeholder="Search..." 
-              value={search} 
-              onChangeText={setSearch} 
-            />
-            <TouchableOpacity style={styles.createBtn} onPress={handleOpenCreate}>
-              <Text style={{ color: themeSecondary, fontWeight: 'bold' }}>+ Create Custom Exercise</Text>
-            </TouchableOpacity>
+            <TextInput style={styles.searchBar} placeholder="Search..." value={search} onChangeText={setSearch} />
+            <TouchableOpacity style={styles.createBtn} onPress={handleOpenCreate}><Text style={{ color: themeSecondary, fontWeight: 'bold' }}>+ Create Custom</Text></TouchableOpacity>
             <FlatList 
               data={filtered} 
               keyExtractor={item => item.id}
               renderItem={({ item }) => (
                 <View style={styles.pickerItemRow}>
-                  <TouchableOpacity style={{ flex: 1, padding: 16 }} onPress={() => onSelect(item.name)}>
+                  <TouchableOpacity style={{ flex: 1, padding: 16 }} onPress={() => onSelect(item)}>
                     <Text style={styles.pickerItemText}>{item.name}</Text>
                     <Text style={styles.pickerItemSub}>{item.category}</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={{ padding: 16, justifyContent: 'center' }} onPress={() => handleOpenEdit(item)}>
-                    <Text style={{ color: themeSecondary, fontWeight: 'bold', fontSize: 12 }}>EDIT</Text>
-                  </TouchableOpacity>
+                  <TouchableOpacity style={{ padding: 16 }} onPress={() => handleOpenEdit(item)}><Text style={{ color: themeSecondary, fontWeight: 'bold' }}>EDIT</Text></TouchableOpacity>
                 </View>
               )}
             />
           </>
         ) : (
           <View style={{ padding: 20 }}>
-            <Text style={styles.label}>Exercise Name</Text>
-            <TextInput 
-              style={[styles.onboardingInput, { marginBottom: 20 }]} 
-              placeholder="e.g. Sled Push" 
-              value={newName} 
-              onChangeText={setNewName} 
-            />
-            
-            <Text style={styles.label}>Primary Muscle Group</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 30 }}>
+            <Text style={styles.label}>Name</Text>
+            <TextInput style={[styles.onboardingInput, { marginBottom: 20 }]} placeholder="e.g. Sled Push" value={newName} onChangeText={setNewName} />
+            <Text style={styles.label}>Muscle Group</Text>
+            <ScrollView horizontal style={{ marginBottom: 30 }}>
               {CATEGORIES.map(cat => (
-                <TouchableOpacity 
-                  key={cat} 
-                  style={[styles.categoryPill, newCategory === cat && { backgroundColor: themeSecondary }]} 
-                  onPress={() => setNewCategory(cat)}
-                >
-                  <Text style={[styles.categoryPillText, newCategory === cat && { color: 'white' }, newCategory === cat && styles.textOutline]}>
-                    {cat}
-                  </Text>
+                <TouchableOpacity key={cat} style={[styles.categoryPill, newCategory === cat && { backgroundColor: themeSecondary }]} onPress={() => setNewCategory(cat)}>
+                  <Text style={[styles.categoryPillText, newCategory === cat && { color: 'white' }]}>{cat}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
-            
-            <TouchableOpacity style={[styles.bigStartBtn, { backgroundColor: themePrimary }]} onPress={handleSave}>
-              <Text style={[styles.bigStartText, styles.textOutline]}>
-                {editingId ? "UPDATE EXERCISE" : "SAVE EXERCISE"}
-              </Text>
-            </TouchableOpacity>
-            
-            {editingId && (
-              <TouchableOpacity style={{ alignItems: 'center', marginTop: 20 }} onPress={handleDelete}>
-                <Text style={{ color: 'red', fontWeight: 'bold' }}>Delete from Database</Text>
-              </TouchableOpacity>
-            )}
-            
-            <TouchableOpacity 
-              style={{ alignItems: 'center', marginTop: editingId ? 15 : 20 }} 
-              onPress={() => { setIsAdding(false); setEditingId(null); }}
-            >
-              <Text style={{ color: '#999', fontWeight: 'bold' }}>Cancel</Text>
-            </TouchableOpacity>
+            <TouchableOpacity style={[styles.bigStartBtn, { backgroundColor: themePrimary }]} onPress={handleSave}><Text style={[styles.bigStartText, styles.textOutline]}>{editingId ? "UPDATE" : "SAVE"}</Text></TouchableOpacity>
+            {editingId && <TouchableOpacity style={{ marginTop: 20 }} onPress={handleDelete}><Text style={{ color: 'red', fontWeight: 'bold', textAlign: 'center' }}>Delete</Text></TouchableOpacity>}
+            <TouchableOpacity style={{ marginTop: 20 }} onPress={() => { setIsAdding(false); setEditingId(null); }}><Text style={{ color: '#999', textAlign: 'center' }}>Cancel</Text></TouchableOpacity>
           </View>
         )}
       </View>
@@ -1404,23 +1299,10 @@ export default function App() {
   const [userInfo, setUserInfo] = useState({ name: '', school: '', friendCode: '' });
   const [themeColors, setThemeColors] = useState({ primary: DEFAULT_PRIMARY, secondary: DEFAULT_SECONDARY });
   const [importedWorkoutData, setImportedWorkoutData] = useState(null);
-  
   const [savedTemplates, setSavedTemplates] = useState([]); 
   const [editingTemplateIndex, setEditingTemplateIndex] = useState(null);
-  
   const [exerciseDB, setExerciseDB] = useState(DEFAULT_EXERCISES);
-
-  const [stats, setStats] = useState({ 
-    level: 1, 
-    currentXP: 0, 
-    weekStreak: 0, 
-    workoutsThisWeek: 0, 
-    lastWeekStart: null, 
-    rank: 99, 
-    totalVolume: 0, 
-    workoutsCompleted: 0 
-  });
-  
+  const [stats, setStats] = useState({ level: 1, currentXP: 0, weekStreak: 0, workoutsThisWeek: 0, lastWeekStart: null, rank: 99, totalVolume: 0, workoutsCompleted: 0 });
   const [history, setHistory] = useState([]);
   const [showSummary, setShowSummary] = useState(false);
   const [lastData, setLastData] = useState(null);
@@ -1435,15 +1317,9 @@ export default function App() {
         const savedColors = await AsyncStorage.getItem('THEME_COLORS_OBJ'); 
         const savedTmpls = await AsyncStorage.getItem('SAVED_TEMPLATES'); 
         const savedDB = await AsyncStorage.getItem('CUSTOM_EXERCISES'); 
-
         if (savedUser) {
           let parsedUser = JSON.parse(savedUser);
-          
-          if (!parsedUser.friendCode) {
-            parsedUser.friendCode = generateFriendCode();
-            await AsyncStorage.setItem('USER_INFO', JSON.stringify(parsedUser));
-          }
-          
+          if (!parsedUser.friendCode) parsedUser.friendCode = generateFriendCode();
           setUserInfo(parsedUser);
           if (savedStats) setStats(JSON.parse(savedStats));
           if (savedHistory) setHistory(JSON.parse(savedHistory));
@@ -1452,11 +1328,7 @@ export default function App() {
           if (savedDB) setExerciseDB(JSON.parse(savedDB)); 
           setScreen('HOME');
         }
-      } catch (e) { 
-        console.log('Failed to load'); 
-      } finally { 
-        setLoading(false); 
-      }
+      } catch (e) { console.log('Failed to load'); } finally { setLoading(false); }
     };
     loadData();
   }, []);
@@ -1472,68 +1344,57 @@ export default function App() {
     const newUser = { name, school, friendCode: generatedCode };
     setUserInfo(newUser);
     setThemeColors(colors);
+    
+    try {
+      await setDoc(doc(db, "users", generatedCode), {
+        name: name,
+        school: school,
+        friendCode: generatedCode,
+        totalXP: 0
+      });
+    } catch (e) {
+      console.error("Error creating user profile:", e);
+    }
+
     await AsyncStorage.setItem('USER_INFO', JSON.stringify(newUser));
     await AsyncStorage.setItem('THEME_COLORS_OBJ', JSON.stringify(colors)); 
     setScreen('HOME');
   };
 
-  const handleReset = async () => {
-    await AsyncStorage.clear();
-    Alert.alert("Reset Complete", "Please swipe up and restart the app to see changes.");
-  };
-
+  const handleReset = async () => { await AsyncStorage.clear(); Alert.alert("Reset", "Please restart app."); };
+  
   const handleFinish = async (data) => {
     const today = new Date();
     const currentWeekStart = getWeekStart(today); 
-    
     let { weekStreak, lastWeekStart, workoutsThisWeek } = stats;
-    let xpBonus = 0;
-    let bonusMsg = "";
-
+    let xpBonus = 0; let bonusMsg = "";
     if (currentWeekStart !== lastWeekStart) {
-      workoutsThisWeek = 1; 
-      const last = lastWeekStart ? new Date(lastWeekStart) : null;
-      if (!last) {
-        weekStreak = 1;
-      } else {
-        const diffDays = (new Date(currentWeekStart) - last) / (1000 * 60 * 60 * 24);
-        if (diffDays <= 7) weekStreak += 1;
-        else weekStreak = 1;
-      }
+      workoutsThisWeek = 1; weekStreak = lastWeekStart ? (((new Date(currentWeekStart) - new Date(lastWeekStart)) / 86400000 <= 7) ? weekStreak + 1 : 1) : 1;
       lastWeekStart = currentWeekStart;
     } else {
       workoutsThisWeek += 1;
-      if (workoutsThisWeek === 2) { xpBonus = 25; bonusMsg = "Grind Bonus! (2x this week)"; }
-      else if (workoutsThisWeek === 3) { xpBonus = 50; bonusMsg = "Consistency Bonus! (3x this week)"; }
-      else if (workoutsThisWeek > 3) { xpBonus = 10; bonusMsg = "Extra Credit! (+10 XP)"; }
+      if (workoutsThisWeek === 2) { xpBonus = 25; bonusMsg = "Grind Bonus!"; }
+      else if (workoutsThisWeek === 3) { xpBonus = 50; bonusMsg = "Consistency!"; }
     }
-
     const finalXP = data.xpEarned + xpBonus;
-
+    
     try {
       await addDoc(collection(db, "workouts"), { 
         user_name: userInfo.name, 
         user_school: userInfo.school, 
-        user_code: userInfo.friendCode,
+        user_code: userInfo.friendCode, 
         workout_name: data.name, 
         total_volume: data.volume, 
         xp_earned: finalXP, 
-        createdAt: serverTimestamp(), 
+        createdAt: serverTimestamp() 
       });
-    } catch (error) { 
-      console.error("Error saving to cloud:", error); 
-    }
+      
+      await updateDoc(doc(db, "users", userInfo.friendCode), {
+        totalXP: stats.currentXP + finalXP
+      });
+    } catch (e) { console.error("Cloud Error:", e); }
 
-    setStats(prev => ({ 
-      ...prev, 
-      currentXP: prev.currentXP + finalXP, 
-      totalVolume: prev.totalVolume + data.volume, 
-      workoutsCompleted: prev.workoutsCompleted + 1, 
-      weekStreak: weekStreak, 
-      workoutsThisWeek: workoutsThisWeek, 
-      lastWeekStart: lastWeekStart
-    }));
-    
+    setStats(prev => ({ ...prev, currentXP: prev.currentXP + finalXP, totalVolume: prev.totalVolume + data.volume, workoutsCompleted: prev.workoutsCompleted + 1, weekStreak, workoutsThisWeek, lastWeekStart }));
     setHistory(prev => [{ ...data, xpEarned: finalXP }, ...prev]);
     setLastData({ ...data, xpEarned: finalXP });
     setBonusMessage(bonusMsg);
@@ -1542,258 +1403,74 @@ export default function App() {
     setScreen('SOCIAL'); 
   };
 
-  const handleDeleteHistoryItem = (indexToDelete) => {
-    const updatedHistory = [...history];
-    updatedHistory.splice(indexToDelete, 1);
-    setHistory(updatedHistory);
-    AsyncStorage.setItem('USER_HISTORY', JSON.stringify(updatedHistory));
+  const handleDeleteHistoryItem = (index) => {
+    const updated = [...history]; updated.splice(index, 1); setHistory(updated);
+    AsyncStorage.setItem('USER_HISTORY', JSON.stringify(updated));
   };
-
-  const handleImportPlan = (formattedPlansArray) => {
-    const newTemplates = [...savedTemplates, ...formattedPlansArray];
+  const handleImportPlan = (formatted) => {
+    const newTemplates = [...savedTemplates, ...formatted];
     setSavedTemplates(newTemplates);
     AsyncStorage.setItem('SAVED_TEMPLATES', JSON.stringify(newTemplates));
-    
-    let dbUpdated = false;
-    let currentDB = [...exerciseDB]; 
-
-    formattedPlansArray.forEach(plan => {
-      plan.exercises.forEach(ex => {
-        const exists = currentDB.some(dbEx => dbEx.name.toLowerCase() === ex.name.toLowerCase());
-        if (!exists) {
-          currentDB.push({ 
-            id: 'custom_' + Date.now() + Math.random(), 
-            name: ex.name, 
-            category: ex.category || 'Other' 
-          });
-          dbUpdated = true;
-        }
-      });
-    });
-
-    if (dbUpdated) {
-      currentDB.sort((a, b) => a.name.localeCompare(b.name));
-      setExerciseDB(currentDB);
-      AsyncStorage.setItem('CUSTOM_EXERCISES', JSON.stringify(currentDB));
-    }
-    
-    Alert.alert(
-      "Saved to Templates!", 
-      `Added ${formattedPlansArray.length} workouts to your Home Screen.`, 
-      [{ text: "Awesome", onPress: () => setScreen('HOME') }]
-    );
+    Alert.alert("Success", `${formatted.length} workouts saved!`, [{ text: "OK", onPress: () => setScreen('HOME') }]);
   };
-
   const handleAddCustomExercise = (newEx) => {
-    const newDb = [...exerciseDB, { id: 'custom_' + Date.now(), name: newEx.name, category: newEx.category }];
-    newDb.sort((a, b) => a.name.localeCompare(b.name));
-    setExerciseDB(newDb);
-    AsyncStorage.setItem('CUSTOM_EXERCISES', JSON.stringify(newDb));
+    const newDb = [...exerciseDB, { id: 'custom_' + Date.now(), name: newEx.name, category: newEx.category }].sort((a,b) => a.name.localeCompare(b.name));
+    setExerciseDB(newDb); AsyncStorage.setItem('CUSTOM_EXERCISES', JSON.stringify(newDb));
   };
-
-  const handleUpdateCustomExercise = (id, newName, newCategory) => {
-    const updatedDb = exerciseDB.map(ex => ex.id === id ? { ...ex, name: newName, category: newCategory } : ex);
-    updatedDb.sort((a, b) => a.name.localeCompare(b.name));
-    setExerciseDB(updatedDb);
-    AsyncStorage.setItem('CUSTOM_EXERCISES', JSON.stringify(updatedDb));
+  const handleUpdateCustomExercise = (id, n, c) => {
+    const dbNew = exerciseDB.map(ex => ex.id === id ? { ...ex, name: n, category: c } : ex).sort((a,b) => a.name.localeCompare(b.name));
+    setExerciseDB(dbNew); AsyncStorage.setItem('CUSTOM_EXERCISES', JSON.stringify(dbNew));
   };
-
-  const handleDeleteCustomExercise = (id) => {
-    const updatedDb = exerciseDB.filter(ex => ex.id !== id);
-    setExerciseDB(updatedDb);
-    AsyncStorage.setItem('CUSTOM_EXERCISES', JSON.stringify(updatedDb));
+  const handleDeleteCustomExercise = (id) => { setExerciseDB(prev => prev.filter(ex => ex.id !== id)); };
+  const handleStartTemplate = (t) => { setImportedWorkoutData(t); setScreen('WORKOUT'); };
+  const handleOpenEditTemplate = (t, i) => { setImportedWorkoutData(t); setEditingTemplateIndex(i); setScreen('EDIT_TEMPLATE'); };
+  const handleSaveEditedTemplate = (upd) => {
+    const arr = [...savedTemplates]; arr[editingTemplateIndex] = upd;
+    setSavedTemplates(arr); AsyncStorage.setItem('SAVED_TEMPLATES', JSON.stringify(arr));
+    setImportedWorkoutData(null); setEditingTemplateIndex(null); setScreen('HOME');
   };
-
-  const handleStartTemplate = (templateData) => {
-    setImportedWorkoutData(templateData);
-    setScreen('WORKOUT');
+  const handleDeleteTemplate = (i) => {
+    Alert.alert("Delete?", "Remove template?", [{ text: "Cancel" }, { text: "Delete", onPress: () => {
+      const upd = savedTemplates.filter((_, idx) => idx !== i);
+      setSavedTemplates(upd); AsyncStorage.setItem('SAVED_TEMPLATES', JSON.stringify(upd));
+    }}]);
   };
-
-  const handleOpenEditTemplate = (templateData, index) => {
-    setImportedWorkoutData(templateData);
-    setEditingTemplateIndex(index);
-    setScreen('EDIT_TEMPLATE');
-  };
-
-  const handleSaveEditedTemplate = (updatedTemplateData) => {
-    const newTemplatesArray = [...savedTemplates];
-    newTemplatesArray[editingTemplateIndex] = updatedTemplateData;
-    
-    setSavedTemplates(newTemplatesArray);
-    AsyncStorage.setItem('SAVED_TEMPLATES', JSON.stringify(newTemplatesArray));
-    
-    setImportedWorkoutData(null);
-    setEditingTemplateIndex(null);
-    setScreen('HOME');
-  };
-
-  const handleDeleteTemplate = (indexToDelete) => {
-    Alert.alert("Delete Workout", "Are you sure you want to remove this template?", [
-      { text: "Cancel", style: "cancel" },
-      { 
-        text: "Delete", 
-        style: "destructive", 
-        onPress: () => {
-          const updated = savedTemplates.filter((_, i) => i !== indexToDelete);
-          setSavedTemplates(updated);
-          AsyncStorage.setItem('SAVED_TEMPLATES', JSON.stringify(updated));
-        } 
-      }
-    ]);
-  };
-
   const handleShareWorkout = async () => {
-    try {
-      await Share.share({
-        message: `I just finished my ${lastData?.name} workout on CampusFit! 🎓\n\nI lifted ${lastData?.volume.toLocaleString()} lbs and earned ${lastData?.xpEarned} XP for ${userInfo.school}.\n\nAdd me to your leaderboard using my Friend Code: ${userInfo.friendCode} 💪`
-      });
-    } catch (error) {
-      console.log("Error sharing", error);
-    }
+    try { await Share.share({ message: `I finished my ${lastData?.name} on CampusFit! 🎓 I lifted ${lastData?.volume.toLocaleString()} lbs and earned ${lastData?.xpEarned} XP! Code: ${userInfo.friendCode}` }); } catch (e) { console.log(e); }
   };
 
-  if (loading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center' }}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  }
-
-  if (screen === 'ONBOARDING') {
-    return (
-      <SafeAreaView style={styles.container}>
-        <OnboardingScreen onComplete={handleOnboardingComplete} />
-      </SafeAreaView>
-    );
-  }
+  if (loading) return <View style={{ flex: 1, justifyContent: 'center' }}><ActivityIndicator size="large" /></View>;
+  if (screen === 'ONBOARDING') return <SafeAreaView style={styles.container}><OnboardingScreen onComplete={handleOnboardingComplete} /></SafeAreaView>;
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={{ flex: 1 }}>
-        {screen === 'HOME' && (
-          <HomeScreen 
-            userStats={stats} 
-            userInfo={userInfo} 
-            onStartWorkout={() => { setImportedWorkoutData(null); setScreen('WORKOUT'); }} 
-            themePrimary={themeColors.primary} 
-            themeSecondary={themeColors.secondary} 
-            savedTemplates={savedTemplates} 
-            onStartTemplate={handleStartTemplate} 
-            onEditTemplate={handleOpenEditTemplate} 
-            onDeleteTemplate={handleDeleteTemplate} 
-          />
-        )}
-        
-        {screen === 'WORKOUT' && (
-          <ActiveWorkoutScreen 
-            onFinish={handleFinish} 
-            onCancel={() => { setImportedWorkoutData(null); setScreen('HOME'); }} 
-            themePrimary={themeColors.primary} 
-            themeSecondary={themeColors.secondary} 
-            initialData={importedWorkoutData} 
-            exerciseDB={exerciseDB} 
-            onAddCustomExercise={handleAddCustomExercise} 
-            onUpdateCustomExercise={handleUpdateCustomExercise} 
-            onDeleteCustomExercise={handleDeleteCustomExercise} 
-          />
-        )}
-
-        {screen === 'EDIT_TEMPLATE' && (
-          <EditTemplateScreen 
-            onSave={handleSaveEditedTemplate} 
-            onCancel={() => { setImportedWorkoutData(null); setEditingTemplateIndex(null); setScreen('HOME'); }} 
-            themePrimary={themeColors.primary} 
-            themeSecondary={themeColors.secondary} 
-            initialData={importedWorkoutData} 
-            exerciseDB={exerciseDB} 
-            onAddCustomExercise={handleAddCustomExercise} 
-            onUpdateCustomExercise={handleUpdateCustomExercise} 
-            onDeleteCustomExercise={handleDeleteCustomExercise} 
-          />
-        )}
-
-        {screen === 'COACH' && (
-          <AICoachScreen 
-            themePrimary={themeColors.primary} 
-            themeSecondary={themeColors.secondary} 
-            onImportPlan={handleImportPlan} 
-          />
-        )}
-
-        {screen === 'SOCIAL' && (
-          <SocialScreen 
-            userInfo={userInfo} 
-            themePrimary={themeColors.primary} 
-            themeSecondary={themeColors.secondary} 
-          />
-        )}
-
-        {screen === 'PROFILE' && (
-          <ProfileScreen 
-            userStats={stats} 
-            history={history} 
-            userInfo={userInfo} 
-            onReset={handleReset} 
-            onDeleteHistory={handleDeleteHistoryItem} 
-            themePrimary={themeColors.primary} 
-            themeSecondary={themeColors.secondary} 
-          />
-        )}
+        {screen === 'HOME' && <HomeScreen userStats={stats} userInfo={userInfo} onStartWorkout={() => { setImportedWorkoutData(null); setScreen('WORKOUT'); }} themePrimary={themeColors.primary} themeSecondary={themeColors.secondary} savedTemplates={savedTemplates} onStartTemplate={handleStartTemplate} onEditTemplate={handleOpenEditTemplate} onDeleteTemplate={handleDeleteTemplate} />}
+        {screen === 'WORKOUT' && <ActiveWorkoutScreen onFinish={handleFinish} onCancel={() => { setImportedWorkoutData(null); setScreen('HOME'); }} themePrimary={themeColors.primary} themeSecondary={themeColors.secondary} initialData={importedWorkoutData} exerciseDB={exerciseDB} onAddCustomExercise={handleAddCustomExercise} onUpdateCustomExercise={handleUpdateCustomExercise} onDeleteCustomExercise={handleDeleteCustomExercise} />}
+        {screen === 'EDIT_TEMPLATE' && <EditTemplateScreen onSave={handleSaveEditedTemplate} onCancel={() => { setImportedWorkoutData(null); setEditingTemplateIndex(null); setScreen('HOME'); }} themePrimary={themeColors.primary} themeSecondary={themeColors.secondary} initialData={importedWorkoutData} exerciseDB={exerciseDB} onAddCustomExercise={handleAddCustomExercise} onUpdateCustomExercise={handleUpdateCustomExercise} onDeleteCustomExercise={handleDeleteCustomExercise} />}
+        {screen === 'COACH' && <AICoachScreen themePrimary={themeColors.primary} themeSecondary={themeColors.secondary} onImportPlan={handleImportPlan} />}
+        {screen === 'SOCIAL' && <SocialScreen userInfo={userInfo} themePrimary={themeColors.primary} themeSecondary={themeColors.secondary} />}
+        {screen === 'PROFILE' && <ProfileScreen userStats={stats} history={history} userInfo={userInfo} onReset={handleReset} onDeleteHistory={handleDeleteHistoryItem} themePrimary={themeColors.primary} themeSecondary={themeColors.secondary} />}
       </View>
-
       {(screen !== 'WORKOUT' && screen !== 'EDIT_TEMPLATE') && (
         <View style={styles.tabBar}>
-          <TouchableOpacity onPress={() => setScreen('HOME')} style={styles.tabItem}>
-            <Text style={[styles.tabText, screen === 'HOME' && { color: themeColors.primary, fontWeight: 'bold' }]}>🏠 Home</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity onPress={() => setScreen('COACH')} style={styles.tabItem}>
-            <Text style={[styles.tabText, screen === 'COACH' && { color: themeColors.primary, fontWeight: 'bold' }]}>🤖 Coach</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity onPress={() => setScreen('SOCIAL')} style={styles.tabItem}>
-            <Text style={[styles.tabText, screen === 'SOCIAL' && { color: themeColors.primary, fontWeight: 'bold' }]}>🏆 Rank</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity onPress={() => setScreen('PROFILE')} style={styles.tabItem}>
-            <Text style={[styles.tabText, screen === 'PROFILE' && { color: themeColors.primary, fontWeight: 'bold' }]}>👤 You</Text>
-          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setScreen('HOME')} style={styles.tabItem}><Text style={[styles.tabText, screen === 'HOME' && { color: themeColors.primary, fontWeight: 'bold' }]}>🏠 Home</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => setScreen('COACH')} style={styles.tabItem}><Text style={[styles.tabText, screen === 'COACH' && { color: themeColors.primary, fontWeight: 'bold' }]}>🤖 Coach</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => setScreen('SOCIAL')} style={styles.tabItem}><Text style={[styles.tabText, screen === 'SOCIAL' && { color: themeColors.primary, fontWeight: 'bold' }]}>🏆 Rank</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => setScreen('PROFILE')} style={styles.tabItem}><Text style={[styles.tabText, screen === 'PROFILE' && { color: themeColors.primary, fontWeight: 'bold' }]}>👤 You</Text></TouchableOpacity>
         </View>
       )}
-
       {showSummary && (
-        <Modal transparent={true} visible={showSummary}>
+        <Modal transparent visible={showSummary}>
           <View style={summaryStyles.overlay}>
             <View style={summaryStyles.modal}>
               <Text style={summaryStyles.header}>WORKOUT COMPLETE</Text>
-              
-              <Text style={[summaryStyles.bigXP, { color: themeColors.primary }, styles.textOutline]}>
-                +{lastData?.xpEarned} XP
-              </Text>
-              
-              {bonusMessage !== "" && (
-                <Text style={{ color: '#4CAF50', fontWeight: 'bold', marginBottom: 10 }}>
-                  {bonusMessage}
-                </Text>
-              )}
-              
-              <Text style={{ color: '#666', marginBottom: 20 }}>Week Streak: {stats.weekStreak} 🔥</Text>
-              
+              <Text style={[summaryStyles.bigXP, { color: themeColors.primary }, styles.textOutline]}>+{lastData?.xpEarned} XP</Text>
+              {bonusMessage !== "" && <Text style={{ color: '#4CAF50', fontWeight: 'bold', marginBottom: 10 }}>{bonusMessage}</Text>}
+              <Text style={{ color: '#666', marginBottom: 20 }}>Streak: {stats.weekStreak} 🔥</Text>
               <View style={{flexDirection: 'row', gap: 10, width: '100%'}}>
-                <TouchableOpacity 
-                  style={[summaryStyles.shareBtn, { backgroundColor: themeSecondary, flex: 1 }]} 
-                  onPress={handleShareWorkout}
-                >
-                  <Text style={[summaryStyles.closeText, styles.textOutline]}>SHARE</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[summaryStyles.closeBtn, { backgroundColor: themeColors.primary, flex: 1 }]} 
-                  onPress={() => setShowSummary(false)}
-                >
-                  <Text style={[summaryStyles.closeText, styles.textOutline]}>RANKING</Text>
-                </TouchableOpacity>
+                <TouchableOpacity style={[summaryStyles.shareBtn, { backgroundColor: themeColors.secondary, flex: 1 }]} onPress={handleShareWorkout}><Text style={[summaryStyles.closeText, styles.textOutline]}>SHARE</Text></TouchableOpacity>
+                <TouchableOpacity style={[summaryStyles.closeBtn, { backgroundColor: themeColors.primary, flex: 1 }]} onPress={() => setShowSummary(false)}><Text style={[summaryStyles.closeText, styles.textOutline]}>RANKING</Text></TouchableOpacity>
               </View>
             </View>
           </View>
@@ -1974,9 +1651,6 @@ const styles = StyleSheet.create({
     width: 40, 
     color: '#999' 
   },
-  top3: { 
-    color: '#FFD700' 
-  }, 
   rankName: { 
     fontSize: 16, 
     fontWeight: '600' 

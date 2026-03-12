@@ -17,13 +17,13 @@ os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
 # --- 2. DEFINE THE STRUCTURED OUTPUTS (THE TOOLS) ---
 class Exercise(BaseModel):
-    name: str = Field(description="Name of the exercise (e.g., 'Squat (Barbell)')")
-    category: str = Field(description="Primary muscle group (e.g., 'Chest', 'Back', 'Legs', 'Arms', 'Shoulders', 'Core', 'Full Body')")
-    sets: int = Field(description="Number of sets")
-    reps: str = Field(description="Target reps (e.g., '10' or '8-12')")
+    name: str = Field(description="Name of the exercise (e.g., 'Squat (Barbell)' or 'Running (Treadmill)')")
+    category: str = Field(description="Primary muscle group or type (e.g., 'Chest', 'Back', 'Legs', 'Arms', 'Shoulders', 'Core', 'Full Body', 'Cardio')")
+    sets: int = Field(description="Number of sets. For Cardio, use 1 for a continuous session, or the number of intervals.")
+    reps: str = Field(description="Target reps (e.g., '10' or '8-12'). For Cardio, output the target distance, time, or level (e.g., '3 miles' or 'Level 5').")
 
 class WorkoutDay(BaseModel):
-    day_name: str = Field(description="e.g., 'Day 1: Heavy Legs' or 'Push Day'")
+    day_name: str = Field(description="e.g., 'Day 1: Heavy Legs' or 'Push Day' or 'Active Recovery'")
     focus: str = Field(description="Main muscle group or motor pattern focus")
     exercises: List[Exercise]
 
@@ -50,13 +50,13 @@ RULES:
 2. IF THE USER ASKS A QUESTION: Be extremely concise. Give a short, punchy summary (1-2 sentences) or a brief bulleted list of the main points. Always end by asking, "Would you like me to explain the science behind this in more detail?"
 3. IF THE USER ASKS FOR A WORKOUT: You must use the WorkoutPlan tool to generate the routine.
 4. Before generating a workout, you must know their: Primary Goal, Days Per Week, and Available Equipment.
-5. Always maintain a professional, analytical, and encouraging tone.
+5. If the user wants CARDIO included, assign the category as 'Cardio'. Use the 'reps' field to dictate distance, time, or intensity (e.g., '30 mins' or '2 miles').
+6. Always maintain a professional, analytical, and encouraging tone.
 """
 
 # --- 4. FASTAPI SETUP ---
 app = FastAPI()
 
-# origins=["*"] is essential for ngrok to work properly
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -79,7 +79,7 @@ class ColorRequest(BaseModel):
 
 @app.post("/get_school_color")
 async def get_school_color(request: ColorRequest):
-    print(f"🎨 Color Request for: {request.school_name}") # DEBUG PRINT
+    print(f"🎨 Color Request for: {request.school_name}") 
     try:
         prompt = f"What are the official primary and secondary brand hex colors for '{request.school_name}'? Be exact."
         color_data = llm_colors.invoke([HumanMessage(content=prompt)])
@@ -90,7 +90,6 @@ async def get_school_color(request: ColorRequest):
 
 @app.post("/chat")
 async def chat_with_coach(request: ChatRequest):
-    # This print will show you exactly what your phone sends in the VS Code terminal
     print(f"📩 Incoming Message History: {request.messages}") 
     
     langchain_messages = [SystemMessage(content=SYSTEM_PROMPT)]
@@ -108,7 +107,7 @@ async def chat_with_coach(request: ChatRequest):
         if response.tool_calls:
             tool_call = response.tool_calls[0]
             workout_data = tool_call["args"]
-            print("🏋️ Workout Tool Triggered!") # DEBUG PRINT
+            print("🏋️ Workout Tool Triggered!") 
             return {
                 "text": "I've put together a routine based on your goals. Save it to your templates if you like it!",
                 "workoutPlan": workout_data
@@ -120,7 +119,7 @@ async def chat_with_coach(request: ChatRequest):
             else:
                 safe_response = str(content)
 
-            print(f"🤖 Coach Response: {safe_response[:50]}...") # DEBUG PRINT
+            print(f"🤖 Coach Response: {safe_response[:50]}...")
             return {
                 "text": safe_response,
                 "workoutPlan": None
